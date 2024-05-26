@@ -1,8 +1,10 @@
-use std::{str::FromStr, time::Duration};
+mod args;
+
+use std::time::Duration;
 
 use hickory_client::rr::{Record, RecordData};
 use hickory_resolver::{
-    config::{NameServerConfig, ResolverConfig, ResolverOpts},
+    config::{ResolverConfig, ResolverOpts},
     name_server::{GenericConnector, TokioRuntimeProvider},
 };
 use hickory_server::{
@@ -16,6 +18,8 @@ use hickory_server::{
 async fn main() {
     let _ = dotenvy::dotenv();
     tracing_subscriber::fmt::init();
+    use clap::Parser;
+    let args = args::Args::parse();
 
     let db = sqlx::SqlitePool::connect(
         std::env::var("DATABASE_URL")
@@ -30,28 +34,30 @@ async fn main() {
         .expect("Failed to run migrations");
 
     let mut config = ResolverConfig::new();
-    config.add_name_server(NameServerConfig::new(
-        std::net::SocketAddr::from_str("127.0.0.1:53").unwrap(),
-        hickory_resolver::config::Protocol::Udp,
-    ));
+    for server in args.upstream_servers {
+        config.add_name_server(server.to_name_server_config());
+    }
     let mut opts = ResolverOpts::default();
-    opts.timeout = Duration::from_secs(1); // because client timeouts are usually about 2 seconds, so we need to be quicker than that
+    opts.timeout = Duration::from_secs(args.upstream_timeout);
 
     let handler = Handler {
         resolver: hickory_resolver::AsyncResolver::tokio(config, opts),
         db,
     };
     let mut srv = ServerFuture::new(handler);
+
+    let listener_addr = std::net::SocketAddr::new(args.bind_address, args.bind_port);
+
     srv.register_listener(
-        tokio::net::TcpListener::bind("127.0.0.1:5356")
+        tokio::net::TcpListener::bind(listener_addr)
             .await
-            .expect("Failed to bind to port tcp/5356"),
+            .expect("Failed to bind to TCP port"),
         Duration::from_secs(10),
     );
     srv.register_socket(
-        tokio::net::UdpSocket::bind("127.0.0.1:5356")
+        tokio::net::UdpSocket::bind(listener_addr)
             .await
-            .expect("Failed to bind to port udp/5356"),
+            .expect("Failed to bind to UDP port"),
     );
     srv.block_until_done().await.expect("Server shut down");
 }
@@ -135,20 +141,6 @@ impl RecordsByKind {
         msg
     }
 }
-
-// fn records_to_response<'a>(
-//     request: &'a Request,
-//     records: &'a [Record],
-//     received_at: std::time::SystemTime,
-// ) -> MessageResponse<
-//     'a,
-//     'a,
-//     IntoIter<&'a Record>,
-//     IntoIter<&'a Record>,
-//     IntoIter<&'a Record>,
-//     IntoIter<&'a Record>,
-// > {
-// }
 
 #[async_trait::async_trait]
 impl RequestHandler for Handler {

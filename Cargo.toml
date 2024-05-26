@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 async-trait = "0.1.80"
+clap = { version = "4.5.4", features = ["derive"] }
 dotenvy = "0.15.7"
 hickory-client = { version = "0.24.1", features = ["serde"] }
 hickory-resolver = { version = "0.24.1", features = ["serde", "serde-config"] }
